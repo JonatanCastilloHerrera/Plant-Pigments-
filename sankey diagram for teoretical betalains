@@ -1,0 +1,157 @@
+# Instalar paquetes si es necesario
+# install.packages("dplyr")
+# install.packages("networkD3")
+# install.packages("readxl")
+# install.packages("shiny")
+
+library(shiny)
+library(readxl)
+library(dplyr)
+library(networkD3)
+
+# --- Interfaz de Usuario (UI) ---
+ui <- fluidPage(
+  titlePanel("Análisis de Derivatizaciones con Sankey Diagram"),
+  
+  fluidRow(
+    column(
+      width = 4,
+      wellPanel(
+        h4("⚙️ Filtros"),
+        checkboxGroupInput("grupo_seleccionado_analisis",
+                           "🎨 Selecciona el grupo de betalaínas:",
+                           choices = NULL,
+                           selected = NULL,
+                           inline = FALSE),
+       
+        checkboxGroupInput("molecula_base_seleccionada",
+                           "🧬 Molécula Base:",
+                           choices = NULL,
+                           selected = NULL,
+                           inline = FALSE),
+        checkboxGroupInput("mod_category_seleccionada",
+                           "🧪 Tipo de Modificación:",
+                           choices = NULL,
+                           selected = NULL,
+                           inline = FALSE)
+      )
+    ),
+    column(
+      width = 8,
+      h4("📈 Diagrama de Sankey: Derivatizaciones de Betalaínas"),
+      networkD3::sankeyNetworkOutput("sankeyPlot", height = "600px")
+    )
+  )
+)
+
+# --- Servidor ---
+server <- function(input, output, session) {
+  
+  # Reactive para cargar y procesar el archivo Excel
+  datos_cargados <- reactive({
+    file_path <- "D:/Users/X/betalainasR/teo_clasificado.xlsx"
+    if (!file.exists(file_path)) {
+      stop(paste("Error: El archivo no se encuentra en la ruta especificada:", file_path))
+    }
+    df <- read_excel(file_path)
+    # Se eliminan las columnas molecula, n_coincidencias, acronimo ya que no existen en este nuevo archivo
+    df <- df %>%
+      select(grupo, molecula_base, modification_category) %>%
+      drop_na(grupo, molecula_base, modification_category) %>%
+      distinct() %>%
+      mutate(count = 1)
+    
+    # Simulación de la columna "especie" para los filtros, ya que no está en el archivo proporcionado
+    # Esto es solo para que el código funcione y no se rompa la UI
+    df$especie <- "Especie Única" 
+    
+    return(df)
+  })
+  
+  # Observador para actualizar dinámicamente las opciones de los filtros
+  observeEvent(datos_cargados(), {
+    data <- datos_cargados()
+    
+    grupos_disponibles <- unique(data$grupo)
+    updateCheckboxGroupInput(session, "grupo_seleccionado_analisis",
+                             choices = grupos_disponibles,
+                             selected = grupos_disponibles)
+    
+    # Se usa la columna simulada "especie"
+    especies_disponibles <- unique(data$especie)
+    updateCheckboxGroupInput(session, "especie_seleccionada_analisis",
+                             choices = especies_disponibles,
+                             selected = especies_disponibles)
+    
+    molecula_base_disponibles <- unique(data$molecula_base)
+    updateCheckboxGroupInput(session, "molecula_base_seleccionada",
+                             choices = molecula_base_disponibles,
+                             selected = molecula_base_disponibles)
+    
+    mod_category_disponibles <- unique(data$modification_category)
+    updateCheckboxGroupInput(session, "mod_category_seleccionada",
+                             choices = mod_category_disponibles,
+                             selected = mod_category_disponibles)
+  })
+  
+  # Reactive para los datos filtrados por las selecciones del usuario
+  datos_filtrados_analisis <- reactive({
+    data <- datos_cargados()
+    if (!is.null(input$grupo_seleccionado_analisis) && length(input$grupo_seleccionado_analisis) > 0) {
+      data <- data %>% filter(grupo %in% input$grupo_seleccionado_analisis)
+    }
+    if (!is.null(input$especie_seleccionada_analisis) && length(input$especie_seleccionada_analisis) > 0) {
+      data <- data %>% filter(especie %in% input$especie_seleccionada_analisis)
+    }
+    if (!is.null(input$molecula_base_seleccionada) && length(input$molecula_base_seleccionada) > 0) {
+      data <- data %>% filter(molecula_base %in% input$molecula_base_seleccionada)
+    }
+    if (!is.null(input$mod_category_seleccionada) && length(input$mod_category_seleccionada) > 0) {
+      data <- data %>% filter(modification_category %in% input$mod_category_seleccionada)
+    }
+    return(data)
+  })
+  
+  # Salida: Generar el Sankey Diagram
+  output$sankeyPlot <- renderSankeyNetwork({
+    data <- datos_filtrados_analisis()
+    
+    if (nrow(data) == 0) {
+      return(NULL)
+    }
+    
+    # Pre-procesamiento de datos para los enlaces
+    links1 <- data %>%
+      group_by(source = grupo, target = molecula_base) %>%
+      summarise(value = sum(count), .groups = "drop") # Usamos 'count' para la suma
+    
+    links2 <- data %>%
+      group_by(source = molecula_base, target = modification_category) %>%
+      summarise(value = sum(count), .groups = "drop") # Usamos 'count' para la suma
+    
+    links <- bind_rows(links1, links2) %>%
+      mutate_at(c("source", "target"), as.character)
+    
+    # Creación de nodos
+    nodes <- data.frame(name = unique(c(links$source, links$target)))
+    
+    # Mapeo de nombres de nodos a IDs numéricos
+    links$IDsource <- match(links$source, nodes$name) - 1
+    links$IDtarget <- match(links$target, nodes$name) - 1
+    
+    # Generar el gráfico
+    sankeyNetwork(
+      Links = links,
+      Nodes = nodes,
+      Source = "IDsource",
+      Target = "IDtarget",
+      Value = "value",
+      NodeID = "name",
+      sinksRight = FALSE,
+      fontSize = 12,
+      nodeWidth = 30
+    )
+  })
+}
+
+shinyApp(ui, server)
